@@ -54,13 +54,17 @@ class Scenario(object):
     self._config = config
     self._active_team = Team.e_Left
     scenario = None
-    try:
-      scenario = importlib.import_module('gfootball.scenarios.{}'.format(config['level']))
-    except ImportError as e:
-      logging.error('Loading scenario "%s" failed' % config['level'])
-      logging.error(e)
-      sys.exit(1)
-    scenario.build_scenario(self)
+    if isinstance(config['level'], str):
+      try:
+        scenario = importlib.import_module('gfootball.scenarios.{}'.format(config['level']))
+      except ImportError as e:
+        logging.error('Loading scenario "%s" failed' % config['level'])
+        logging.error(e)
+        sys.exit(1)
+      scenario.build_scenario(self)
+    else:
+      config['level'](self)
+
     self.SetTeam(libgame.e_Team.e_Left)
     self._FakePlayersForEmptyTeam(self._scenario_cfg.left_team)
     self.SetTeam(libgame.e_Team.e_Right)
