@@ -2,7 +2,9 @@
 import os
 import time
 import numpy as np
+import pickle
 import os.path as osp
+import datetime
 from baselines import logger
 from collections import deque
 from baselines.common import explained_variance, set_global_seeds
@@ -112,6 +114,26 @@ def learn(network, FLAGS, eval_env = None, seed=None, nsteps=2048, ent_coef=0.0,
     nbatch_train = nbatch // nminibatches
     is_mpi_root = (MPI is None or MPI.COMM_WORLD.Get_rank() == 0)
 
+    # Configure logger to log_ppo_timestamp formatted
+    pickle_str = 'curriculum_ppo_' + '-'.join(str(datetime.datetime.now()).replace(':', ' ').split(' '))
+
+    # open pickle file to append relevant data in binary
+    pickle_dir = os.path.join(os.getcwd(), 'pickled_data/')
+
+    # create file for pickling
+    if not os.path.exists(pickle_dir + pickle_str):
+      os.makedirs(pickle_dir)
+      with open(pickle_dir + pickle_str, 'w+'): 
+        pass
+      
+    
+  
+    logger.configure(
+      dir=logger.get_dir(),
+      format_strs=['log', 'json']
+    )
+    print('logger configured!')
+
     # Instantiate the model object (that creates act_model and train_model)
     if model_fn is None:
         from baselines.ppo2.model import Model
@@ -175,14 +197,16 @@ def learn(network, FLAGS, eval_env = None, seed=None, nsteps=2048, ent_coef=0.0,
         # Calculate the cliprange
         cliprangenow = cliprange(0)
 
-        if update % log_interval == 0 and is_mpi_root: logger.info('Stepping environment...')
+        if update % log_interval == 0 and is_mpi_root: 
+            logger.info('Stepping environment...')
 
         # Get minibatch
         obs, returns, masks, actions, values, neglogpacs, states, epinfos = runner.run() #pylint: disable=E0632
         if eval_env is not None:
             eval_obs, eval_returns, eval_masks, eval_actions, eval_values, eval_neglogpacs, eval_states, eval_epinfos = eval_runner.run() #pylint: disable=E0632
     
-        if update % log_interval == 0 and is_mpi_root: logger.info('Done.')
+        if update % log_interval == 0 and is_mpi_root: 
+            logger.info('Done.')
 
         eprews.extend([i['r'] for i in epinfos])
         epinfobuf.extend(epinfos)
@@ -218,6 +242,16 @@ def learn(network, FLAGS, eval_env = None, seed=None, nsteps=2048, ent_coef=0.0,
                     slices = (arr[mbflatinds] for arr in (obs, returns, masks, actions, values, neglogpacs))
                     mbstates = states[mbenvinds]
                     mblossvals.append(model.train(lrnow, cliprangenow, *slices, mbstates))
+
+        # pickling
+        pickle_data = [
+          update*nsteps, # timesteps
+          safemean([epinfo['r'] for epinfo in epinfobuf]), # ep reward mean
+          safemean([epinfo['l'] for epinfo in epinfobuf]), # ep len mean
+          curriculum[difficulty_idx], # difficulty
+        ]
+        with open(pickle_dir + pickle_str, 'ab') as pickle_file:
+            pickle.dump(pickle_data, pickle_file)                      
 
         # Feedforward --> get losses --> update
         lossvals = np.mean(mblossvals, axis=0)
