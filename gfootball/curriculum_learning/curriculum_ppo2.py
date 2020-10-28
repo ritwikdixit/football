@@ -122,17 +122,10 @@ def learn(network, FLAGS, eval_env = None, seed=None, nsteps=2048, ent_coef=0.0,
 
     # create file for pickling
     if not os.path.exists(pickle_dir + pickle_str):
-      os.makedirs(pickle_dir)
+      if not os.path.exists(pickle_dir): 
+        os.makedirs(pickle_dir)
       with open(pickle_dir + pickle_str, 'w+'): 
         pass
-      
-    
-  
-    logger.configure(
-      dir=logger.get_dir(),
-      format_strs=['log', 'json']
-    )
-    print('logger configured!')
 
     # Instantiate the model object (that creates act_model and train_model)
     if model_fn is None:
@@ -250,8 +243,10 @@ def learn(network, FLAGS, eval_env = None, seed=None, nsteps=2048, ent_coef=0.0,
           safemean([epinfo['l'] for epinfo in epinfobuf]), # ep len mean
           curriculum[difficulty_idx], # difficulty
         ]
+        start_time = time.time()
         with open(pickle_dir + pickle_str, 'ab') as pickle_file:
             pickle.dump(pickle_data, pickle_file)                      
+        print(time.time() - start_time, 's pickle time')
 
         # Feedforward --> get losses --> update
         lossvals = np.mean(mblossvals, axis=0)
