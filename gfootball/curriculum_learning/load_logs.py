@@ -5,10 +5,11 @@ import pickle
 # ep reward mean
 # ep len mean
 # difficulty
-def pretty_print(timesteps, eprewmean, eplenmean, difficulty):
+def pretty_print(timesteps, eprewmean_buf, rewlen, awsr, difficulty):
   print('timesteps', timesteps)
-  print('ep reward mean', eprewmean)
-  print('ep len mean', eplenmean)
+  print('ep reward mean (last 100 episodes)', eprewmean_buf)
+  print('length of rewards arr', rewlen)
+  print('sum of last (window_size=1e4,1e5) rewards', awsr)
   print('difficulty', difficulty)
   print('===')
 

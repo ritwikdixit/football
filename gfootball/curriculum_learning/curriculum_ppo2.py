@@ -19,6 +19,7 @@ except ImportError:
     MPI = None
 from baselines.ppo2.runner import Runner
 import gfootball.env as football_env
+from gfootball.curriculum_learning import load_logs
 
 def constfn(val):
     def f(_):
@@ -29,7 +30,7 @@ def learn(network, FLAGS, eval_env = None, seed=None, nsteps=2048, ent_coef=0.0,
             vf_coef=0.5,  max_grad_norm=0.5, gamma=0.99, lam=0.95,
             log_interval=10, nminibatches=4, noptepochs=4, cliprange=0.2,
             save_interval=0, load_path=None, model_fn=None, update_fn=None, init_fn=None, mpi_rank_weight=1, comm=None, 
-            average_window_size=int(1e5), stop=True,
+            average_window_size=256, stop=True,
             scenario='gfootball.scenarios.1_vs_1_easy',
             curriculum=np.linspace(0, 0.95, 20),
             **network_kwargs):
@@ -166,7 +167,7 @@ def learn(network, FLAGS, eval_env = None, seed=None, nsteps=2048, ent_coef=0.0,
     if eval_env is not None:
         eval_runner = Runner(env = eval_env, model = model, nsteps = nsteps, gamma = gamma, lam= lam)
  
-    eprews = []
+    eprews = deque(maxlen=average_window_size)
     epinfobuf = deque(maxlen=100)
     if eval_env is not None:
         eval_epinfobuf = deque(maxlen=100)
@@ -236,13 +237,19 @@ def learn(network, FLAGS, eval_env = None, seed=None, nsteps=2048, ent_coef=0.0,
                     mbstates = states[mbenvinds]
                     mblossvals.append(model.train(lrnow, cliprangenow, *slices, mbstates))
 
+
+        # sum of last average_window_size rewards
+        last_aws_rewards_sum = sum(eprews)
+
         # pickling
         pickle_data = [
           update*nsteps, # timesteps
-          safemean([epinfo['r'] for epinfo in epinfobuf]), # ep reward mean
-          safemean([epinfo['l'] for epinfo in epinfobuf]), # ep len mean
+          safemean([epinfo['r'] for epinfo in epinfobuf]), # last 100 episodes mean
+          len(eprews), # total number of rewards
+          last_aws_rewards_sum, # sum of rewards in last window size.
           curriculum[difficulty_idx], # difficulty
         ]
+        load_logs.pretty_print(*pickle_data)
         start_time = time.time()
         with open(pickle_dir + pickle_str, 'ab') as pickle_file:
             pickle.dump(pickle_data, pickle_file)                      
@@ -283,7 +290,7 @@ def learn(network, FLAGS, eval_env = None, seed=None, nsteps=2048, ent_coef=0.0,
             savepath = osp.join(checkdir, '%.5i'%update)
             print('Saving to', savepath)
             model.save(savepath)
-        if difficulty_idx < len(curriculum)-1 and len(eprews) >= average_window_size and sum(eprews[-average_window_size:]) >= 0:
+        if difficulty_idx < len(curriculum)-1 and len(eprews) >= average_window_size and last_aws_rewards_sum >= 0:
             difficulty_idx += 1
             print("\n\n\n\n\n=====================================\n",
                   "INCREASING DIFFICULTY TO",curriculum[difficulty_idx],
