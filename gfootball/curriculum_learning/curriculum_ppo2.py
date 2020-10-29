@@ -295,7 +295,7 @@ def learn(network, FLAGS, eval_env = None, seed=None, nsteps=2048, ent_coef=0.0,
             print("\n\n\n\n\n=====================================\n",
                   "INCREASING DIFFICULTY TO",curriculum[difficulty_idx],
                   "\n===========================================\n\n\n\n\n\n")
-            env, runner = make_runner(curriculum[difficulty_idx], model=model, nsteps=nsteps, gamma=gamma, lam=lam)
+            env, runner = make_runner(curriculum[difficulty_idx])
             if eval_env is not None:
                 eval_runner = Runner(env = eval_env, model = model, nsteps = nsteps, gamma = gamma, lam= lam)
     return model
