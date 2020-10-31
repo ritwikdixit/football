@@ -9,7 +9,7 @@ def pretty_print(timesteps, eprewmean_buf, rewlen, awsr, difficulty):
   print('timesteps', timesteps)
   print('ep reward mean (last 100 episodes)', eprewmean_buf)
   print('length of rewards arr', rewlen)
-  print('sum of last (window_size=1e4,1e5) rewards', awsr)
+  print('sum of last window_size rewards', awsr)
   print('difficulty', difficulty)
   print('===')
 

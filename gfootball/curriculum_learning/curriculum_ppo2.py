@@ -30,7 +30,7 @@ def learn(network, FLAGS, eval_env = None, seed=None, nsteps=2048, ent_coef=0.0,
             vf_coef=0.5,  max_grad_norm=0.5, gamma=0.99, lam=0.95,
             log_interval=10, nminibatches=4, noptepochs=4, cliprange=0.2,
             save_interval=0, load_path=None, model_fn=None, update_fn=None, init_fn=None, mpi_rank_weight=1, comm=None, 
-            average_window_size=256, stop=True,
+            average_window_size=32, stop=True,
             scenario='gfootball.scenarios.1_vs_1_easy',
             curriculum=np.linspace(0, 0.95, 20),
             **network_kwargs):
@@ -167,7 +167,7 @@ def learn(network, FLAGS, eval_env = None, seed=None, nsteps=2048, ent_coef=0.0,
     if eval_env is not None:
         eval_runner = Runner(env = eval_env, model = model, nsteps = nsteps, gamma = gamma, lam= lam)
  
-    eprews = deque(maxlen=average_window_size)
+    eprews = []
     epinfobuf = deque(maxlen=100)
     if eval_env is not None:
         eval_epinfobuf = deque(maxlen=100)
@@ -239,7 +239,7 @@ def learn(network, FLAGS, eval_env = None, seed=None, nsteps=2048, ent_coef=0.0,
 
 
         # sum of last average_window_size rewards
-        last_aws_rewards_sum = sum(eprews)
+        last_aws_rewards_sum = sum(eprews[-average_window_size:])
 
         # pickling
         pickle_data = [
