@@ -6,9 +6,12 @@ import numpy as np
 
 REWMEAN = 0
 DIFFICULTY = 1
+WINDOWREW = 2
 
-titles = ['Moving Episode Reward Mean over Last 100 Episodes', 'Difficulty of Rule-Based Agent in 1v1']
-ylabels = ['Episode Reward Mean', 'Difficulty']
+titles = ['Moving Episode Reward Mean over Last 100 Episodes', 
+'Difficulty of Rule-Based Agent in 1v1',
+'Sum of Last [Window Size] Rewards']
+ylabels = ['Episode Reward Mean', 'Difficulty', 'Window Reward Sum']
 
 colors = [
     '#5d42f5',
@@ -42,6 +45,7 @@ def train_results(config):
     # use pickle path as first argument
     timesteps = []
     eprewmeans = []
+    sum_of_last_windowsize_rewards=[]
     difficulties = []
 
     path = sys.argv[1]
@@ -49,14 +53,16 @@ def train_results(config):
         logs_list = pickle.load(pickle_file)
         while True:
             try:
-                print(pretty_print(*logs_list))
                 timesteps.append(logs_list[0])
                 eprewmeans.append(logs_list[1])
+                sum_of_last_windowsize_rewards.append(logs_list[3])
+                if logs_list[3] > 0:
+                    print(pretty_print(*logs_list))
                 difficulties.append(logs_list[4])
                 logs_list = pickle.load(pickle_file)
             except EOFError:
                 break
-    ys = [eprewmeans, difficulties]
+    ys = [eprewmeans, difficulties, sum_of_last_windowsize_rewards]
     
     plt.plot(
         timesteps,
@@ -106,7 +112,7 @@ def eval_results():
 
 
 if __name__ == '__main__':
-    train_results(REWMEAN)
+    train_results(WINDOWREW)
     #eval_results()
 
 
