@@ -33,6 +33,7 @@ def learn(network, FLAGS, eval_env = None, seed=None, nsteps=2048, ent_coef=0.0,
             average_window_size=32, stop=True,
             scenario='gfootball.scenarios.1_vs_1_easy',
             curriculum=np.linspace(0, 0.95, 20),
+            eval_period=10, eval_episodes=1,
             **network_kwargs):
     '''
     Learn policy using PPO algorithm (https://arxiv.org/abs/1707.06347)
@@ -117,16 +118,22 @@ def learn(network, FLAGS, eval_env = None, seed=None, nsteps=2048, ent_coef=0.0,
 
     # Configure logger to log_ppo_timestamp formatted
     pickle_str = 'curriculum_ppo_' + '-'.join(str(datetime.datetime.now()).replace(':', ' ').split(' '))
+    eval_pickle_str = pickle_str + '_eval'
 
     # open pickle file to append relevant data in binary
     pickle_dir = os.path.join(os.getcwd(), 'pickled_data/')
 
-    # create file for pickling
-    if not os.path.exists(pickle_dir + pickle_str):
-      if not os.path.exists(pickle_dir): 
+    # create files for pickling
+    if not os.path.exists(pickle_dir): 
         os.makedirs(pickle_dir)
-      with open(pickle_dir + pickle_str, 'w+'): 
-        pass
+
+    def make_file(file_path):
+        if not os.path.exists(file_path):
+            with open(file_path, 'w+'):
+                print('made path', file_path)
+    
+    make_file(pickle_dir + pickle_str)
+    make_file(pickle_dir + eval_pickle_str)
 
     # Instantiate the model object (that creates act_model and train_model)
     if model_fn is None:
@@ -140,23 +147,23 @@ def learn(network, FLAGS, eval_env = None, seed=None, nsteps=2048, ent_coef=0.0,
     if load_path is not None:
         model.load(load_path)
 
-    def make_runner(difficulty):
-        def create_single_football_env(iprocess):
-            """Creates gfootball environment."""
-            env = football_env.create_environment(
-                env_name=build_builder_with_difficulty(difficulty), stacked=('stacked' in FLAGS.state),
-                rewards=FLAGS.reward_experiment,
-                logdir=logger.get_dir(),
-                write_goal_dumps=FLAGS.dump_scores and (iprocess == 0),
-                write_full_episode_dumps=FLAGS.dump_full_episodes and (iprocess == 0),
-                render=FLAGS.render and (iprocess == 0),
-                dump_frequency=50 if FLAGS.render and iprocess == 0 else 0)
-            env = monitor.Monitor(env, logger.get_dir() and os.path.join(logger.get_dir(),
-                                                                        str(iprocess)))
-            return env
+    def create_single_football_env(iprocess, difficulty):
+        """Creates gfootball environment."""
+        env = football_env.create_environment(
+            env_name=build_builder_with_difficulty(difficulty), stacked=('stacked' in FLAGS.state),
+            rewards=FLAGS.reward_experiment,
+            logdir=logger.get_dir(),
+            write_goal_dumps=FLAGS.dump_scores and (iprocess == 0),
+            write_full_episode_dumps=FLAGS.dump_full_episodes and (iprocess == 0),
+            render=FLAGS.render and (iprocess == 0),
+            dump_frequency=50 if FLAGS.render and iprocess == 0 else 0)
+        env = monitor.Monitor(env, logger.get_dir() and os.path.join(logger.get_dir(),
+                                                                    str(iprocess)))
+        return env
 
+    def make_runner(difficulty):
         vec_env = SubprocVecEnv([
-            (lambda _i=i: create_single_football_env(_i))
+            (lambda _i=i: create_single_football_env(_i, difficulty))
             for i in range(FLAGS.num_envs)
         ], context=None)
         print('vec env obs space', vec_env.observation_space)
@@ -164,13 +171,14 @@ def learn(network, FLAGS, eval_env = None, seed=None, nsteps=2048, ent_coef=0.0,
     # Instantiate the runner object
     env, runner = make_runner(curriculum[0])
     difficulty_idx = 0
-    if eval_env is not None:
-        eval_runner = Runner(env = eval_env, model = model, nsteps = nsteps, gamma = gamma, lam= lam)
- 
+     
     eprews = []
+
+    # eval_rews[i] will be all the rewards from evaluation i
+    # eval_rews[i][j] will be rewards from evaluation i at difficulty j ~ 2:20 = (0.05, 0.95)
+    eval_rews = [] 
+
     epinfobuf = deque(maxlen=100)
-    if eval_env is not None:
-        eval_epinfobuf = deque(maxlen=100)
 
     if init_fn is not None:
         init_fn()
@@ -196,16 +204,12 @@ def learn(network, FLAGS, eval_env = None, seed=None, nsteps=2048, ent_coef=0.0,
 
         # Get minibatch
         obs, returns, masks, actions, values, neglogpacs, states, epinfos = runner.run() #pylint: disable=E0632
-        if eval_env is not None:
-            eval_obs, eval_returns, eval_masks, eval_actions, eval_values, eval_neglogpacs, eval_states, eval_epinfos = eval_runner.run() #pylint: disable=E0632
     
         if update % log_interval == 0 and is_mpi_root: 
             logger.info('Done.')
 
         eprews.extend([i['r'] for i in epinfos])
         epinfobuf.extend(epinfos)
-        if eval_env is not None:
-            eval_epinfobuf.extend(eval_epinfos)
 
         # for each minibatch calculate the loss and append it.
         mblossvals = []
@@ -265,6 +269,35 @@ def learn(network, FLAGS, eval_env = None, seed=None, nsteps=2048, ent_coef=0.0,
         if update_fn is not None:
             update_fn(update)
 
+        # eprews.extend([i['r'] for i in epinfos])
+
+        # every eval period run for eval_nsteps on every difficulty
+        if update % eval_period == 1:
+            # rews[i] = sum of rewards from eval_nsteps for difficulty index i
+            eval_rews_period = [] # 2D array
+            eval_rews_period_sum = [] # 1D array
+            for difficulty_eval in curriculum[::2]:
+                eval_env, eval_runner = make_runner(difficulty_eval)
+                eval_rewards_for_difficulty = []
+                for k in range(eval_episodes):
+                    # run nsteps for the number of eval episodes (nsteps * episodes)
+                    eval_obs, eval_returns, eval_masks, eval_actions, eval_values, eval_neglogpacs, eval_states, eval_epinfos = eval_runner.run() #pylint: disable=E0632
+                    # append the array of all the rewards gotten for this difficulty in the episode.
+                    eval_rewards_for_difficulty.extend([i['r'] for i in eval_epinfos])
+                eval_rews_period.append(eval_rewards_for_difficulty)
+                eval_rews_period_sum.append(sum(eval_rewards_for_difficulty))
+                print("rews eval timstep", update*nsteps, "difficulty", difficulty_eval, eval_rewards_for_difficulty, "sum", eval_rews_period_sum[-1])
+
+            eval_rews.append(eval_rews_period)
+            eval_pickle_data = [
+              update*nsteps, # timesteps for trainer
+              eval_rews_period, # 2D array which contains all rewards gotten for all difficulties this eval period.
+              eval_rews_period_sum
+            ]
+            with open(pickle_dir + eval_pickle_str, 'ab') as eval_pickle_file:
+                pickle.dump(eval_pickle_data, eval_pickle_file)
+            print('eval pickle dumped, u#', update)
+
         if update % log_interval == 0 or update == 1:
             # Calculates if value function is a good predicator of the returns (ev > 1)
             # or if it's just worse than predicting nothing (ev =< 0)
@@ -276,9 +309,11 @@ def learn(network, FLAGS, eval_env = None, seed=None, nsteps=2048, ent_coef=0.0,
             logger.logkv("misc/explained_variance", float(ev))
             logger.logkv('eprewmean', safemean([epinfo['r'] for epinfo in epinfobuf]))
             logger.logkv('eplenmean', safemean([epinfo['l'] for epinfo in epinfobuf]))
+            '''
             if eval_env is not None:
                 logger.logkv('eval_eprewmean', safemean([epinfo['r'] for epinfo in eval_epinfobuf]) )
                 logger.logkv('eval_eplenmean', safemean([epinfo['l'] for epinfo in eval_epinfobuf]) )
+            '''
             logger.logkv('misc/time_elapsed', tnow - tfirststart)
             for (lossval, lossname) in zip(lossvals, model.loss_names):
                 logger.logkv('loss/' + lossname, lossval)
@@ -296,8 +331,6 @@ def learn(network, FLAGS, eval_env = None, seed=None, nsteps=2048, ent_coef=0.0,
                   "INCREASING DIFFICULTY TO",curriculum[difficulty_idx],
                   "\n===========================================\n\n\n\n\n\n")
             env, runner = make_runner(curriculum[difficulty_idx])
-            if eval_env is not None:
-                eval_runner = Runner(env = eval_env, model = model, nsteps = nsteps, gamma = gamma, lam= lam)
     return model
 # Avoid division error when calculate the mean (in our case if epinfo is empty returns np.nan, not return an error)
 def safemean(xs):
