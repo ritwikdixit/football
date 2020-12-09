@@ -63,6 +63,7 @@ flags.DEFINE_bool('dump_full_episodes', False,
 flags.DEFINE_bool('dump_scores', False,
                   'If True, sampled traces after scoring are dumped.')
 flags.DEFINE_string('load_path', None, 'Path to load initial checkpoint from.')
+flags.DEFINE_string('scenario', 'gfootball.scenarios.1_vs_1_easy', 'Scenario to run')
 
 def train(_):
   """Trains a PPO2 policy."""
@@ -78,7 +79,7 @@ def train(_):
   config.gpu_options.allow_growth = True
   tf.Session(config=config).__enter__()
 
-
+  print('Running scenario', FLAGS.scenario)
   curriculum_ppo2.learn(FLAGS.policy,
              FLAGS,
              seed=FLAGS.seed,
@@ -91,6 +92,7 @@ def train(_):
              lr=FLAGS.lr,
              log_interval=1,
              save_interval=FLAGS.save_interval,
+             scenario=FLAGS.scenario,
              cliprange=FLAGS.cliprange,
              load_path=FLAGS.load_path)
 
