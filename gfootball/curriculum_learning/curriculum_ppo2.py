@@ -29,11 +29,11 @@ def constfn(val):
 def learn(network, FLAGS, eval_env = None, seed=None, nsteps=2048, ent_coef=0.0, lr=3e-4,
             vf_coef=0.5,  max_grad_norm=0.5, gamma=0.99, lam=0.95,
             log_interval=10, nminibatches=4, noptepochs=4, cliprange=0.2,
-            save_interval=0, load_path=None, model_fn=None, update_fn=None, init_fn=None, mpi_rank_weight=1, comm=None, 
-            average_window_size=32, stop=True,
+            save_interval=10, load_path=None, model_fn=None, update_fn=None, init_fn=None, mpi_rank_weight=1, comm=None, 
+            episode_window_size=20, stop=True,
             scenario='gfootball.scenarios.1_vs_1_easy',
             curriculum=np.linspace(0, 0.95, 20),
-            eval_period=10, eval_episodes=1,
+            eval_period=100, eval_episodes=1,
             **network_kwargs):
     '''
     Learn policy using PPO algorithm (https://arxiv.org/abs/1707.06347)
@@ -104,6 +104,8 @@ def learn(network, FLAGS, eval_env = None, seed=None, nsteps=2048, ent_coef=0.0,
     
     policy = build_policy(env, network, **network_kwargs)
 
+    average_window_size = episode_window_size * 16
+
     # Get the nb of env
     nenvs = FLAGS.num_envs
 
@@ -122,10 +124,13 @@ def learn(network, FLAGS, eval_env = None, seed=None, nsteps=2048, ent_coef=0.0,
 
     # open pickle file to append relevant data in binary
     pickle_dir = '/content/cs285_f2020_proj/pickled_data/'
+    model_dir = '/content/cs285_f2020_proj/models/'
 
-    # create files for pickling
+    # create dir for pickling & model save
     if not os.path.exists(pickle_dir): 
         os.makedirs(pickle_dir)
+    if not os.path.exists(model_dir): 
+        os.makedirs(model_dir)
 
     def make_file(file_path):
         if not os.path.exists(file_path):
@@ -179,11 +184,6 @@ def learn(network, FLAGS, eval_env = None, seed=None, nsteps=2048, ent_coef=0.0,
         ], context=None)
         print('vec env obs space', vec_env.observation_space)
         return env, Runner(env=vec_env, model=model, nsteps=nsteps, gamma=gamma, lam=lam) 
-
-    env = SubprocVecEnv([
-        (lambda _i=i: create_single_football_env(_i))
-        for i in range(FLAGS.num_envs)
-    ], context=None)
     
     policy = build_policy(env, network, **network_kwargs)
      
@@ -223,7 +223,11 @@ def learn(network, FLAGS, eval_env = None, seed=None, nsteps=2048, ent_coef=0.0,
         if update % log_interval == 0 and is_mpi_root: 
             logger.info('Done.')
 
-        eprews.extend([i['r'] for i in epinfos])
+        rewards_this_episode = [i['r'] for i in epinfos]
+        lengths_this_episode = [i['l'] for i in epinfos]
+
+        print('episode rewards ep#', update, rewards_this_episode)
+        eprews.extend(rewards_this_episode)
         epinfobuf.extend(epinfos)
 
         # for each minibatch calculate the loss and append it.
@@ -261,18 +265,25 @@ def learn(network, FLAGS, eval_env = None, seed=None, nsteps=2048, ent_coef=0.0,
         last_aws_rewards_sum = sum(eprews[-average_window_size:])
 
         # pickling
-        pickle_data = [
-          update*nsteps, # timesteps
-          safemean([epinfo['r'] for epinfo in epinfobuf]), # last 100 episodes mean
-          len(eprews), # total number of rewards
-          last_aws_rewards_sum, # sum of rewards in last window size.
-          curriculum[difficulty_idx], # difficulty
-        ]
-        load_logs.pretty_print(*pickle_data)
-        start_time = time.time()
+        pickle_data = {
+          'episode' : update,
+          'timesteps' : update*nsteps,
+          'episode_rewards' : rewards_this_episode,
+          'episode_window_size' : episode_window_size,
+          'last_window_size_rewards' : eprews[-average_window_size:],
+          'difficulty' : curriculum[difficulty_idx],
+          'len_rewards_array' : len(eprews),
+          'episode_lenths' : lengths_this_episode,
+          'eval_period' : eval_period,
+        }
+
+        def dict_print(d):
+          for k in d:
+            print(k, d[k])
+
+        dict_print(pickle_data)
         with open(pickle_dir + pickle_str, 'ab') as pickle_file:
             pickle.dump(pickle_data, pickle_file)                      
-        print(time.time() - start_time, 's pickle time')
 
         # Feedforward --> get losses --> update
         lossvals = np.mean(mblossvals, axis=0)
@@ -284,10 +295,8 @@ def learn(network, FLAGS, eval_env = None, seed=None, nsteps=2048, ent_coef=0.0,
         if update_fn is not None:
             update_fn(update)
 
-        # eprews.extend([i['r'] for i in epinfos])
-
         # every eval period run for eval_nsteps on every difficulty
-        if update % eval_period == 1:
+        if update % eval_period == 2:
             # rews[i] = sum of rewards from eval_nsteps for difficulty index i
             eval_rews_period = [] # 2D array
             eval_rews_period_sum = [] # 1D array
@@ -334,10 +343,8 @@ def learn(network, FLAGS, eval_env = None, seed=None, nsteps=2048, ent_coef=0.0,
                 logger.logkv('loss/' + lossname, lossval)
 
             logger.dumpkvs()
-        if save_interval and (update % save_interval == 0 or update == 1) and logger.get_dir() and is_mpi_root:
-            checkdir = osp.join(logger.get_dir(), 'checkpoints')
-            os.makedirs(checkdir, exist_ok=True)
-            savepath = osp.join(checkdir, '%.5i'%update)
+        if save_interval and update % save_interval == 1:
+            savepath = osp.join(model_dir, pickle_str)
             print('Saving to', savepath)
             model.save(savepath)
         if difficulty_idx < len(curriculum)-1 and len(eprews) >= average_window_size and last_aws_rewards_sum >= 0:
