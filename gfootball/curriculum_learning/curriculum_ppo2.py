@@ -121,7 +121,7 @@ def learn(network, FLAGS, eval_env = None, seed=None, nsteps=2048, ent_coef=0.0,
     eval_pickle_str = pickle_str + '_eval'
 
     # open pickle file to append relevant data in binary
-    pickle_dir = os.path.join(os.getcwd(), 'pickled_data/')
+    pickle_dir = '/content/cs285_f2020_proj/pickled_data/'
 
     # create files for pickling
     if not os.path.exists(pickle_dir): 
@@ -171,6 +171,21 @@ def learn(network, FLAGS, eval_env = None, seed=None, nsteps=2048, ent_coef=0.0,
     # Instantiate the runner object
     env, runner = make_runner(curriculum[0])
     difficulty_idx = 0
+
+    def make_eval_runner(difficulty):
+        vec_env = SubprocVecEnv([
+            (lambda _i=i: create_single_football_env(_i, difficulty))
+            for i in range(FLAGS.num_env, 2*FLAGS.num_env)
+        ], context=None)
+        print('vec env obs space', vec_env.observation_space)
+        return env, Runner(env=vec_env, model=model, nsteps=nsteps, gamma=gamma, lam=lam) 
+
+    env = SubprocVecEnv([
+        (lambda _i=i: create_single_football_env(_i))
+        for i in range(FLAGS.num_envs)
+    ], context=None)
+    
+    policy = build_policy(env, network, **network_kwargs)
      
     eprews = []
 
@@ -277,7 +292,7 @@ def learn(network, FLAGS, eval_env = None, seed=None, nsteps=2048, ent_coef=0.0,
             eval_rews_period = [] # 2D array
             eval_rews_period_sum = [] # 1D array
             for difficulty_eval in curriculum[::2]:
-                eval_env, eval_runner = make_runner(difficulty_eval)
+                eval_env, eval_runner = make_eval_runner(difficulty_eval)
                 eval_rewards_for_difficulty = []
                 for k in range(eval_episodes):
                     # run nsteps for the number of eval episodes (nsteps * episodes)
